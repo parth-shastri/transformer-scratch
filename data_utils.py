@@ -63,9 +63,9 @@ def prepare_tokenizer(tokenizer_path: Union[str, os.PathLike], ds, config: MyGPT
         logger.info("Tokenizer Not found")
         logger.info("Training a BPE tokenizer...")
         tokenizer = Tokenizer(BPE())
-        tokenizer.normalizer = tokenizers.normalizers.Sequence([NFKC()])
+        # tokenizer.normalizer = tokenizers.normalizers.Sequence([NFKC()]) # no normalizer for
         tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False, use_regex=True)
-        tokenizer.post_processor = processors.ByteLevel(trim_offsets=False)
+        tokenizer.post_processor = processors.ByteLevel(trim_offsets=False)  # trim the whitespaces before/after tokens in the offsets
         tokenizer.decoder = decoders.ByteLevel()
         trainer = BpeTrainer(   
             vocab_size=config.vocab_size,

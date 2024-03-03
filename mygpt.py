@@ -1,5 +1,6 @@
 import torch 
 import torch.nn as nn
+import torch.nn.functional as F
 from model_utils import Decoder, ProjectionLayer
 
 class MyGPT(nn.Module):
@@ -9,10 +10,15 @@ class MyGPT(nn.Module):
         self.decoder = Decoder(n_layers, seq_len, vocab_size, d_model, h, d_ff, mha_dropout, ff_dropout, res_dropout, prenorm)
         self.proj = ProjectionLayer(d_model, vocab_size)
 
-    def forward(self, x: torch.Tensor, attn_mask) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, targets=None) -> torch.Tensor:
         # (B, seq_len, 1) --> (B, seq_len, vocab_size)
-        x = self.decoder(x, attn_mask)
-        return self.proj(x)
+        x = self.decoder(x)
+        logits = self.proj(x)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100)
+        return logits, loss
 
 
 def build_gpt(vocab_size, seq_len, n_layers: int=6, d_model: int=512, mha_dropout: float=0.1, ff_dropout: int=0.1, res_dropout: float=0.1, h:int=8, d_ff: int=2048, prenorm=True) -> MyGPT:
@@ -37,7 +43,9 @@ def _test_model_init():
     print("test seq_len: {}".format(seq_len))
     print("test batch_size: {}".format(batch_size))
 
-    out = myGPT(x, torch.triu(torch.ones((1, seq_len, seq_len)), diagonal=1)[:, None, ...].type(torch.int) == 0)
+    #mask simulation
+    mask = torch.triu(torch.ones((1, seq_len, seq_len)), diagonal=1)[:, None, ...].type(torch.int) == 0
+    out, _ = myGPT(x)
     print("Output shape: {}".format(out.shape))
 
 

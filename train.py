@@ -44,41 +44,21 @@ def greedy_decoding(
     eos_idx = tokenizer.token_to_id(config.eos_token)
 
     # Init the decoder input
-    decoder_input = (
-        torch.empty(1, 1)
-        .fill_(sos_idx)
-        .type_as(context if context is not None else torch.int64)
-    )  # (1, 1)
-    if context is not None:
-        decoder_input = torch.cat([decoder_input, context], dim=1)
+    decoder_input = context if context is not None else torch.tensor([sos_idx], dtype=torch.int64).unsqueeze(0)
 
     # the decoding loop
     while True:
         if decoder_input.size(1) == max_len:
             break
 
-        # build decoder mask
-        decoder_mask = (
-            causal_mask(decoder_input.size(1)).unsqueeze(1).to(device)
-        )  # (1, 1, context_len, context_len)
-
         # calculate the output
-        out = model(decoder_input, decoder_mask)
+        out, _ = model(decoder_input)
 
         # probs of the next token
         prob = F.softmax(out[:, -1, :], dim=-1)
-        print(prob)
+        # greedy decode (select the argmax)
         _, next_word = torch.max(prob, dim=-1)
-        decoder_input = torch.cat(
-            [
-                decoder_input,
-                torch.empty(1, 1)
-                .fill_(next_word.item())
-                .type_as(decoder_input)
-                .to(device),
-            ],
-            dim=1,
-        )
+        decoder_input = torch.cat([decoder_input, next_word.unsqueeze(-1)], dim=1)
 
         if next_word == eos_idx:
             break
@@ -247,10 +227,10 @@ def train(config: MyGPTConfig):
     # PRELOAD AND INIT #
     ####################
     # summary writer
-    writer = SummaryWriter(
-        config.experiment_name,
-        comment=f"LR_{config.lr}_BATCH_{config.batch_size}_ADAMW",
-    )
+    # writer = SummaryWriter(
+    #     config.experiment_name,
+    #     comment=f"LR_{config.lr}_BATCH_{config.batch_size}_ADAMW",
+    # )
     # weight loading
     initial_epoch = 0
     global_step = 0
@@ -293,42 +273,42 @@ def train(config: MyGPTConfig):
         ##############
         # TRAIN LOOP #
         ##############
-        for batch_idx, batch in enumerate(batch_iter):
-            model_input = batch["input_ids"].to(device)  # (B, seq_len)
-            attention_mask = batch[
-                "attention_mask"
-            ]  # (B, 1, seq_len) dont put this on GPU as this is not to be used
+        # for batch_idx, batch in enumerate(batch_iter):
+        #     model_input = batch["input_ids"].to(device)  # (B, seq_len)
+        #     attention_mask = batch[
+        #         "attention_mask"
+        #     ]  # (B, 1, seq_len) dont put this on GPU as this is not to be used
 
-            # label
-            label = batch["labels"].to(device)  # (B, seq_len)
+        #     # label
+        #     label = batch["labels"].to(device)  # (B, seq_len)
 
-            # cau_msk = causal_mask(attention_mask.size(-1))  # (1, seq_len, seq_len)
-            # decoder_mask = (attention_mask & cau_msk)[:, None, ...].to(
-            #     device
-            # )  # mask out the padding token and the next token (B, 1, seq_len, seq_len)
+        #     # cau_msk = causal_mask(attention_mask.size(-1))  # (1, seq_len, seq_len)
+        #     # decoder_mask = (attention_mask & cau_msk)[:, None, ...].to(
+        #     #     device
+        #     # )  # mask out the padding token and the next token (B, 1, seq_len, seq_len)
 
-            # output
-            model_out, _ = model(model_input)
+        #     # output
+        #     model_out, _ = model(model_input)
 
-            # Calculate theloss
-            loss = loss_fn(model_out.view(-1, config.vocab_size), label.view(-1))
-            # modify the loss for the accumulation steps
-            loss = loss / config.accumulation_steps
-            batch_iter.set_postfix({"loss": f"{loss.item():6.3f}"})
+        #     # Calculate theloss
+        #     loss = loss_fn(model_out.view(-1, config.vocab_size), label.view(-1), ignore_index=-100)
+        #     # modify the loss for the accumulation steps
+        #     loss = loss / config.accumulation_steps
+        #     batch_iter.set_postfix({"loss": f"{loss.item():6.3f}"})
 
-            # Log the loss
-            writer.add_scalar("train_loss", loss.item(), global_step)
-            writer.flush()
+        #     # Log the loss
+        #     writer.add_scalar("train_loss", loss.item(), global_step)
+        #     writer.flush()
 
-            # Backpropagate the gradients
-            loss.backward()
+        #     # Backpropagate the gradients
+        #     loss.backward()
 
-            # Update the weights according to the gradient accumulation steps
-            if not batch_idx % config.accumulation_steps:
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+        #     # Update the weights according to the gradient accumulation steps
+        #     if not batch_idx % config.accumulation_steps:
+        #         optimizer.step()
+        #         optimizer.zero_grad(set_to_none=True)
 
-            global_step += 1
+        #     global_step += 1
 
         # Run validation
         writer = None

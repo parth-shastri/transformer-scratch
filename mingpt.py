@@ -48,9 +48,12 @@ class CausalMultiHeadAttention(nn.Module):
         # causal attention mask
         self.register_buffer(
             "masked_bias",
-            torch.tril(torch.ones((config.seq_len, config.seq_len))
-                       .view(1, 1, config.seq_len, config.seq_len))
-            )
+            torch.tril(
+                torch.ones((config.seq_len, config.seq_len)).view(
+                    1, 1, config.seq_len, config.seq_len
+                )
+            ),
+        )
         self.n_head = config.num_heads
         self.n_embed = config.d_model
 
@@ -58,7 +61,7 @@ class CausalMultiHeadAttention(nn.Module):
         B, T, C = x.size()  # (B, seq_len, d_model)
 
         # calculate the query, key and values
-        q, k, v = self.c_attn(x).split(self.n_embed, dim=2) 
+        q, k, v = self.c_attn(x).split(self.n_embed, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
@@ -66,35 +69,40 @@ class CausalMultiHeadAttention(nn.Module):
         # causal self attention
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         # fill the causal mask
-        att = att.masked_fill(self.masked_bias[:, :, :T, :T] == 0, float("-inf"))  # fill with -ve inf vals
+        att = att.masked_fill(
+            self.masked_bias[:, :, :T, :T] == 0, float("-inf")
+        )  # fill with -ve inf vals
         # softmax
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
         y = att @ v
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-        
+
         # output projection w_o
         y = self.residual_dropout(self.c_proj(y))
         return y
 
 
 class Block(nn.Module):
-    """ Transformer Block"""
+    """Transformer Block"""
+
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.d_model)
         self.attn = CausalMultiHeadAttention(config)
         self.ln_2 = nn.LayerNorm(config.d_model)
-        self.mlp = nn.ModuleDict(dict(
-            c_fc = nn.Linear(config.d_model, config.d_ff),
-            c_proj = nn.Linear(config.d_ff, config.d_model),
-            act = GELU(),
-            dropout = nn.Dropout(config.ff_dropout)
-        ))
+        self.mlp = nn.ModuleDict(
+            dict(
+                c_fc=nn.Linear(config.d_model, config.d_ff),
+                c_proj=nn.Linear(config.d_ff, config.d_model),
+                act=GELU(),
+                dropout=nn.Dropout(config.ff_dropout),
+            )
+        )
 
         m = self.mlp
         self.mlpf = lambda x: m.dropout(m.c_proj(m.act(m.c_fc(x))))
-    
+
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))  # prenorm
         x = x + self.mlpf(self.ln_2(x))
@@ -108,24 +116,28 @@ class GPT(nn.Module):
         assert config.d_model is not None
         self.seq_len = config.seq_len
 
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.d_model),
-            wpe = nn.Embedding(config.seq_len, config.d_model),
-            drop = nn.Dropout(config.embed_dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.num_layers)]),
-            ln_f = nn.LayerNorm(config.d_model)
-        ))
+        self.transformer = nn.ModuleDict(
+            dict(
+                wte=nn.Embedding(config.vocab_size, config.d_model),
+                wpe=nn.Embedding(config.seq_len, config.d_model),
+                drop=nn.Dropout(config.embed_dropout),
+                h=nn.ModuleList([Block(config) for _ in range(config.num_layers)]),
+                ln_f=nn.LayerNorm(config.d_model),
+            )
+        )
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
 
         # init all the weights as normal distribution N(0 , 0.02)
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.num_layers))
+            if pn.endswith("c_proj.weight"):
+                torch.nn.init.normal_(
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.num_layers)
+                )
 
         # report number of parameters
         n_parameters = sum(p.numel() for p in self.transformer.parameters())
-        print("number of parameters: %.2fM" % (n_parameters/1e6,))
+        print("number of parameters: %.2fM" % (n_parameters / 1e6,))
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -141,8 +153,12 @@ class GPT(nn.Module):
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
-        assert t <= self.seq_len, f"The max seq_len is exceeded, Found len {t} expected {self.seq_len}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+        assert (
+            t <= self.seq_len
+        ), f"The max seq_len is exceeded, Found len {t} expected {self.seq_len}"
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(
+            0
+        )  # shape (1, t)
 
         # forward the model
         token_emb = self.transformer.wte(idx)
@@ -157,7 +173,9 @@ class GPT(nn.Module):
         # if the targets are given compute the loss
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100
+            )
         return logits, loss
 
     @classmethod
@@ -167,7 +185,7 @@ class GPT(nn.Module):
         match the weights and then copy them over to our little GPT
         """
 
-        assert model_name in {"gpt2", "gpt2-medium", 'gpt2-large', 'gpt2-xl'}
+        assert model_name in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
         from transformers import GPT2LMHeadModel
         from config import MyGPTConfig
 
@@ -186,9 +204,14 @@ class GPT(nn.Module):
 
         # init the huggingface/transformers model
         model_hf = GPT2LMHeadModel.from_pretrained(model_name)
-        sd_hf = model_hf.state_dict() 
+        sd_hf = model_hf.state_dict()
         keys = [k for k in sd if not k.endswith("attn.masked_bias")]
-        transposed = ["attn.c_attn.weight", "attn.c_proj.weight", "mlp.c_fc.weight", "mlp.c_proj.weight"]
+        transposed = [
+            "attn.c_attn.weight",
+            "attn.c_proj.weight",
+            "mlp.c_fc.weight",
+            "mlp.c_proj.weight",
+        ]
 
         assert len(keys) == len(sd_hf)
         for k in keys:
@@ -202,7 +225,9 @@ class GPT(nn.Module):
 
             else:
                 # vanilla copy for all the others
-                assert sd_hf[k].shape == sd[k].shape, f"Shape mismatch for {k}. Found {sd_hf[k].shape} and {sd[k].shape}"
+                assert (
+                    sd_hf[k].shape == sd[k].shape
+                ), f"Shape mismatch for {k}. Found {sd_hf[k].shape} and {sd[k].shape}"
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
 
@@ -210,7 +235,7 @@ class GPT(nn.Module):
 
     def configure_optimizers(self, config):
         """
-        Configure optimizers for the GPT model, 
+        Configure optimizers for the GPT model,
          1. The LayerNorm should not be added to the weight decay
          2. Embedding layers wont experience weight decay
          3. Biases should be excluded as well
@@ -218,7 +243,7 @@ class GPT(nn.Module):
 
         decay = set()
         no_decay = set()
-        include_modules = (nn.Linear, )
+        include_modules = (nn.Linear,)
         exclude_modules = (nn.LayerNorm, nn.Embedding)
 
         for mn, m in self.named_modules():
@@ -229,7 +254,7 @@ class GPT(nn.Module):
                 if pn.endswith("bias"):
                     # all biases are excluded
                     no_decay.add(full_name)
-                elif pn.endswith('weight') and isinstance(m, include_modules):
+                elif pn.endswith("weight") and isinstance(m, include_modules):
                     decay.add(full_name)
                 elif pn.endswith("weight") and isinstance(m, exclude_modules):
                     no_decay.add(full_name)
@@ -240,29 +265,33 @@ class GPT(nn.Module):
         union_params = decay | no_decay
 
         assert len(inter_params) == 0
-        assert len(param_dict.keys() - union_params) == 0 
+        assert len(param_dict.keys() - union_params) == 0
 
         optim_params = [
             {
-                "params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": config.weight_decay
+                "params": [param_dict[pn] for pn in sorted(list(decay))],
+                "weight_decay": config.weight_decay,
             },
             {
-                "params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0
-            }
-        ] 
+                "params": [param_dict[pn] for pn in sorted(list(no_decay))],
+                "weight_decay": 0.0,
+            },
+        ]
         optimizer = torch.optim.AdamW(optim_params, lr=config.lr, betas=config.betas)
 
-        return optimizer              
+        return optimizer
 
     @torch.no_grad
-    def generate(self, idx, max_new_tokens, temperature=0.1, do_sample=True, top_k=None):
+    def generate(
+        self, idx, max_new_tokens, temperature=0.1, do_sample=True, top_k=None
+    ):
         """
         This is the function to generate max_new_tokens len of tokens given idx (LongTensor of shape (b, seq_len))
         either greedy or sampling from a distribution, with top_k, use in model.eval()
         """
         for _ in range(max_new_tokens):
             # if the input sequence is too long crop it from the left
-            idx_cond = idx if idx.size(1) <= self.seq_len else idx[:, :-self.seq_len]
+            idx_cond = idx if idx.size(1) <= self.seq_len else idx[:, : -self.seq_len]
             # forward pass through the model
             logits, _ = self(idx_cond)
             # take the last logit

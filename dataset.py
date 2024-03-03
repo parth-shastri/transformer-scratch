@@ -78,7 +78,7 @@ class WikiText(Dataset):
             [
                 torch.tensor(data_tokenized, dtype=torch.int64),
                 self.eos_token,
-                torch.tensor([self.pad_token] * pad_len, dtype=torch.int64),
+                torch.tensor([-100] * pad_len, dtype=torch.int64),   # replace pad token to -100 in the label
             ],
             dim=0,
         )
@@ -118,14 +118,18 @@ if __name__ == "__main__":
 
     train_dataloader = DataLoader(train_ds, batch_size=config.batch_size)
 
-    # for data in train_dataloader:
-    #     print(data['input_ids'].shape)
+    # look at 10 examples 
+    print(train_ds[0])
+
+    # look at one batch
+    for data in train_dataloader:
+        print(data)
+        break
 
     from data_utils import data_iterator
     val_iterator = data_iterator(val_ds)
 
-    for item in val_iterator:
-        print(len(item))
-        
+    # for item in val_iterator:
+    #     print(item)   
 
     # print(len(val_ds))

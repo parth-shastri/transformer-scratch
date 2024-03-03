@@ -31,7 +31,7 @@ class MyGPTConfig:
 
     # saving and loading args
     datasource = "wikitext/wikitext-103-raw-v1"
-    model_folder: Union[str, PathLike] = "weights-gpt2like"
+    model_folder: Union[str, PathLike] = "weights-gptmini"
     model_basename: str = "gptmini_wiki_"
     preload: Union[str, int] = "latest"
     tokenizer_file = "data/tokenizer"

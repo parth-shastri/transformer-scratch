@@ -61,13 +61,16 @@ class InputEmbeddings(nn.Module):
     
 
 class MultiHeadAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, h: int, dropout: float):
+    def __init__(self, d_model: int, seq_len: int, h: int, dropout: float):
         super().__init__()
         self.d_model = d_model
         self.h = h
+        self.seq_len = seq_len
         # make sure the d_model is divisible by h
         assert d_model % h == 0, 'd_model is not divisible by h'
         # initilalize the projection layers to generate the q, k & v
+
+        self.register_buffer("masked_bias", torch.tril(torch.ones([self.seq_len, self.seq_len])).unsqueeze(0).unsqueeze(0))
         
         self.d_k = self.d_model // h # the per head feature dim
         self.w_q = nn.Linear(d_model, d_model, bias=False)
@@ -76,17 +79,16 @@ class MultiHeadAttentionBlock(nn.Module):
         self.w_o = nn.Linear(d_model, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-    @staticmethod
-    def attention(q, k, v, mask, dropout: nn.Dropout):
-        d_k = q.shape[-1]
+    def attention(self, q, k, v, dropout: nn.Dropout):
+        _, _, T, d_k = q.shape
         # formula from the paper attention is all you need
         # (B, h, seq_len, d_k) ---> (b, h, seq_len, seq_len)
         # attention_scores = (q @ k.transpose(-2, -1) / math.sqrt(d_k))
         attention_scores = einsum(q, k, "b h i d, b h j d -> b h i j",) / math.sqrt(d_k)
-        if mask is not None:
+        if self.masked_bias is not None:
             # using the masked_fill_ method of the tensor
-            # write very small values where mask is zero to denote -inf -1e9
-            attention_scores.masked_fill_(mask, -1e9)
+            # write very small values where mask is zero to denote -inf ==> -1e9
+            attention_scores.masked_fill_(self.masked_bias[:, :, :T, :T] == 0, -1e9)
         attention_scores = attention_scores.softmax(dim=-1)
         if dropout is not None:
             attention_scores = dropout(attention_scores)
@@ -95,10 +97,10 @@ class MultiHeadAttentionBlock(nn.Module):
         # return the attention scores so that they can be visualized
         return (attention_scores @ v), attention_scores
 
-    def forward(self, q, k, v, mask):
+    def forward(self, q, k, v):
         query = self.w_q(q)
         key = self.w_k(k)
-        value = self.w_q(q)
+        value = self.w_q(v)
 
         # (B, seq_len, d_model) --> (B, seq_len, h, d_k) --> (B, h, seq_len, d_k)
         query = rearrange(query.reshape(query.shape[0], query.shape[1], self.h, self.d_k), 'b s h d -> b h s d')
@@ -106,7 +108,7 @@ class MultiHeadAttentionBlock(nn.Module):
         value = rearrange(value.reshape(value.shape[0], value.shape[1], self.h, self.d_k), 'b s h d -> b h s d')
 
         # calculate the attention
-        x, self.attention_scores = MultiHeadAttentionBlock.attention(query, key, value, mask , self.dropout)
+        x, self.attention_scores = self.attention(query, key, value, self.dropout)
 
         # combine all the heads
         #  (B, h, seq_len, d_k) --> (B, seq_len, h, d_k) --> (B, seq_len, d_model)
@@ -144,10 +146,10 @@ class FeedForwardBlock(nn.Module):
     
     
 class DecoderBlock(nn.Module):
-    def __init__(self, d_model: int, h: int, d_ff:int, mha_dropout: float, ff_dropout: float, res_dropout: float, prenorm=True):
+    def __init__(self, d_model: int, seq_len: int, h: int, d_ff:int, mha_dropout: float, ff_dropout: float, res_dropout: float, prenorm=True):
         super().__init__()
         # init the multihead attention and the feedforward block
-        self.mha = MultiHeadAttentionBlock(d_model, h, mha_dropout)
+        self.mha = MultiHeadAttentionBlock(d_model, seq_len, h, mha_dropout)
         # init the residual connections
         self.res_1 = ResidualConnection(d_model, res_dropout, prenorm=True)
         self.res_2 = ResidualConnection(d_model, res_dropout, prenorm=True)
@@ -155,9 +157,9 @@ class DecoderBlock(nn.Module):
         # init the feedforward connection
         self.ff = FeedForwardBlock(d_ff, d_model, ff_dropout)
 
-    def forward(self, x, attn_mask):
+    def forward(self, x):
         # (B, seq_len, d_model)
-        x = self.res_1(x, lambda x: self.mha(x, x, x, attn_mask))
+        x = self.res_1(x, lambda x: self.mha(x, x, x))
         x = self.res_2(x, self.ff)
         return x
 
@@ -170,17 +172,17 @@ class Decoder(nn.Module):
         # init the positional encoding layer
         self.pos_enc = PositionalEncoding(d_model, seq_len, res_dropout)
         # init the layers with the decoder block
-        decoder_blocks = [DecoderBlock(d_model, h, d_ff, mha_dropout, ff_dropout, res_dropout, prenorm) for _ in range(n_layers)]
+        decoder_blocks = [DecoderBlock(d_model, seq_len, h, d_ff, mha_dropout, ff_dropout, res_dropout, prenorm) for _ in range(n_layers)]
 
         self.decoder_blocks = nn.ModuleList(decoder_blocks)
     
-    def forward(self, x, attn_mask):
+    def forward(self, x):
         # (B, seq_len) --> (B, seq_len, d_model)
         x = self.emb(x)
         x = self.pos_enc(x)
 
         for sublayer in self.decoder_blocks:
-            x = sublayer(x, attn_mask)
+            x = sublayer(x)
         
         return x
 
